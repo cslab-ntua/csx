@@ -1,0 +1,106 @@
+SHELL = /bin/bash
+
+.PHONY: all clean
+
+all: libspmv.o spmv
+
+## Configuration
+dynarray_dir = ../dynarray
+prfcnt_dir   = ../prfcnt
+
+dynarray_dep = $(dynarray_dir)/dynarray.o
+
+# This is ugly and non-portable
+# (we need a script to return CPU MhZs)
+MHZ_SH      ?= $(shell pwd)/$(prfcnt_dir)/scripts/cpu_mhz.sh
+
+GCC         ?= llvm-gcc
+CFLAGS      ?= -Wall -Winline -O3 -Wdisabled-optimization -fPIC
+CFLAGS      += -g
+DEFS        += -DCPU_MHZ_SH=\"$(MHZ_SH)\"
+#CFLAGS      += -DCPU_CORE -DSPMV_PRFCNT # performance counters for an intel core
+DEFS        += -D_GNU_SOURCE -D_LARGEFILE64_SOURCE -D__STDC_FORMAT_MACROS
+LIBS         = -lm -lpthread
+INC          = -I$(dynarray_dir) -I$(prfcnt_dir)
+COMPILE      = $(GCC) $(CFLAGS) $(INC) $(DEFS)
+
+#ifeq ($(CPU),NIAGARA)
+#	CFLAGS += -m64
+#	LD = ld -melf64_sparc
+#endif
+#
+#ifeq ($(shell $(prfcnt_dir)/scripts/numa_lib.sh FOO),FOO)
+#	DEFS += -DSPM_NUMA
+#	LIBS += -lnuma
+#endif
+
+# do this, so that it doesn't match default %.c - >%.o rules
+$(dynarray_dep):
+
+deps         = $(dynarray_dep)
+libspmv_deps = vector.o method.o mt_lib.o mmf.o  \
+               spm_crs.o spm_crs_mt.o            \
+               spmv_loops.o spmv_loops_mt.o
+
+libspmv.o: $(libspmv_deps) $(deps)
+	$(LD) -i --allow-multiple-definition $(libspmv_deps) $(deps) -o libspmv.o
+
+vector.o: vector.c vector.h
+	for t in double float; do                                 \
+           $(COMPILE) -DELEM_TYPE=$$t  -c $< -o vector_$${t}.o;   \
+        done
+	$(LD) -i vector_{double,float}.o -o vector.o
+
+mmf.o: mmf.c mmf.h
+	$(COMPILE) -c $< -o $@
+
+method.o: method.c method.h
+	$(COMPILE) -c $< -o $@
+
+mt_lib.o: mt_lib.c mt_lib.h
+	$(COMPILE) -c $< -o $@
+
+spm_crs.o:  spm_crs.c spm_crs.h
+	for t in double float; do                          \
+	  for ci in 32 64; do                              \
+	    $(COMPILE) -DSPM_CRS_BITS=$$ci -DELEM_TYPE=$$t \
+	               -o spm_crs$${ci}_$${t}.o -c $< ;    \
+	  done                                             \
+	done
+	$(LD) -i spm_crs{64,32}_{double,float}.o -o spm_crs.o
+
+spm_crs_mt.o:  spm_crs_mt.c spm_crs_mt.h
+	for t in double float; do                             \
+	  for ci in 32 64; do                                 \
+	    $(COMPILE) -DSPM_CRS_BITS=$$ci -DELEM_TYPE=$$t    \
+	               -o spm_crs$${ci}_$${t}_mt.o -c $< ;    \
+	  done                                                \
+	done
+	$(LD) -i spm_crs{64,32}_{double,float}_mt.o -o spm_crs_mt.o
+
+spmv_loops.o: spmv_loops.c spmv_method.h vector.h
+	$(COMPILE) -DELEM_TYPE=float  -c $< -o spmv_loops_float.o
+	$(COMPILE) -DELEM_TYPE=double -c $< -o spmv_loops_double.o
+	$(LD) -i spmv_loops_{float,double}.o -o spmv_loops.o
+
+spmv_loops_mt.o: spmv_loops_mt.c spmv_method.h vector.h ../prfcnt/*.h
+	$(COMPILE) -DELEM_TYPE=float  -c $< -o spmv_loops_mt_float.o
+	$(COMPILE) -DELEM_TYPE=double -c $< -o spmv_loops_mt_double.o
+	$(LD) -i spmv_loops_mt_{float,double}.o -o spmv_loops_mt.o
+
+spmv.o: spmv.c
+	$(COMPILE) -c $< -o $@
+
+spmv: spmv.o libspmv.o
+	$(COMPILE) $(LIBS) $^ -o $@
+
+## Usefull fallbacks
+%.s: %.c
+	$(COMPILE) -S -fverbose-asm $<
+%.o: %.c
+	$(COMPILE) -c $<
+%.i: %.c
+	$(COMPILE) -E $< | indent -kr > $@
+
+clean:
+	rm -f *.s *.o *.i spmv
