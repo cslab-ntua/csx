@@ -587,6 +587,7 @@ void DRLE_Manager::DoEncode(std::vector<uint64_t> &xs, std::vector<double> &vs,
                 SpmRowElem *last_elem = &encoded.back();
                 rle_start = col;
                 rle_freq = rle.freq;
+#ifndef SPM_NUMA
                 if (last_elem->pattern == NULL) {
                     // include the previous element, too
                     rle_start -= rle.val;
@@ -594,6 +595,7 @@ void DRLE_Manager::DoEncode(std::vector<uint64_t> &xs, std::vector<double> &vs,
                     encoded.pop_back();
                     --vi;
                 }
+#endif
             } else {
                 // we are the first unit in the row
                 rle_start = col;
@@ -1111,10 +1113,18 @@ void DRLE_Manager::UpdateStats(SPM *spm, std::vector<uint64_t> &xs,
     uint64_t col = 0;
     bool last_rle_patt = false; // turn on for encoded units
     FOREACH(RLE<uint64_t> &rle, rles) {
-        int real_limit = (col && !last_rle_patt) ? min_limit_ - 1 : min_limit_;
+#ifndef SPM_NUMA
+        long real_limit = (col && !last_rle_patt) ? min_limit_ - 1 : min_limit_;
+#else
+        long real_limit = min_limit_;
+#endif
         if (rle.freq > 1 && rle.freq >= real_limit) {
-            uint64_t real_nnz = (col && !last_rle_patt) ?
+#ifndef SPM_NUMA
+            long real_nnz = (col && !last_rle_patt) ?
                 rle.freq + 1 : rle.freq;
+#else
+            long real_nnz = rle.freq;
+#endif
             stats[rle.val].nnz += real_nnz;
             stats[rle.val].npatterns += (real_nnz) / max_limit_ +
                                         (real_nnz % max_limit_ != 0);
